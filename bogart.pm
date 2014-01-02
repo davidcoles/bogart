@@ -24,39 +24,16 @@ sub TIEHASH {
     return 1;
 }
 
-sub listener {
-    my($l, $sendq, $r) = @_;
-    my %t;
-    while(defined(my $s = $l->accept)) {
-	threads->create( sub { connection($s,$sendq) });
-	close($s);
-	#map { $_->join } threads->list(threads::joinable); # bug?
-    }
-}
-
-sub connection {
-    my($s, $send, $recv) = @_;
-    my $recv = Thread::Queue->new;
-    my $json = JSON->new->indent(0)->utf8(1);
-    while(<$s>) {
-	my $o = from_json($_);
-	my($hash, $oper, @args) = @$o;
-	$send->enqueue([$recv, $hash, $oper, @args]);
-	printf $s "%s\n", $json->encode($recv->dequeue);
-    }
-    close($s);
-    return 0;
-}
-
 sub run {
     my($self, $path, $mode) = @_;
     $SIG{PIPE} = sub { };
     unlink($path);
     
-    my $l = IO::Socket::UNIX->new(Local => $path, Listen=>5) or die;
-    my $t = threads->create(\&listener, $l, my $q = new Thread::Queue);
+    my $l = IO::Socket::UNIX->new(Local => $path, Listen => 5) or die "$!\n";
+    my $q = new Thread::Queue;
+    my $t = threads->create(\&server, $l, $q);
     chmod($mode, $path) if defined $mode;
-
+    
     while(defined(my $m = $q->dequeue())) {
 	my($recv, $hash, $oper, @args) = @$m;
 	my $r = [undef];
@@ -75,6 +52,29 @@ sub run {
     }
 }
 
+sub server {
+    my($l, $sendq) = @_;
+    while(defined(my $s = $l->accept)) {
+	threads->create(
+	    sub {
+		my($s, $send) = @_;
+		my $recv = Thread::Queue->new;
+		my $json = JSON->new->indent(0)->utf8(1);
+		while(<$s>) {
+		    my $o = from_json($_);
+		    my($hash, $oper, @args) = @$o;
+		    $send->enqueue([$recv, $hash, $oper, @args]);
+		    printf $s "%s\n", $json->encode($recv->dequeue);
+		}
+		close($s);
+		return 0;
+	    }, $s,$sendq);
+	close($s);
+	#map { $_->join } threads->list(threads::joinable); # bug?
+    }
+}
+
+
 package bogart::hash;
 use IO::Socket::UNIX;
 use AutoLoader 'AUTOLOAD';
@@ -92,7 +92,7 @@ sub AUTOLOAD {
 }
 
 sub TIEHASH {
-    my($pkg, $h, $p, @args) = @_;
+    my($pkg, $p, $h, @args) = @_;
     my $j = JSON->new->indent(0)->utf8(1);
     my $s = IO::Socket::UNIX->new(Peer => $p) or return undef;
     printf $s "%s\n", $j->encode([ $h, 'TIEHASH',  @args ]);
@@ -145,9 +145,6 @@ use File::Temp;
 
 our $JSON = JSON->new->indent(0)->utf8(1);
 
-sub new { 
-    shift->SUPER::new('bogart::lord') }
-
 sub serialise {
     encode_base64(to_json(shift->{_shd}));
 }
@@ -157,7 +154,7 @@ sub deserialise {
     $_[0]->{_db} = {};
     my %d = %{from_json(decode_base64($_[1]))};
     foreach(keys %d) {
-	warn "deserialised $_ ...\n";
+	warn "deserialised $_ ...\n" if $ENV{DEBUG};
 	my $val = $d{$_};
 	my $MMSIZE = 0;
 	my $MMFILE = tmpnam();
@@ -186,7 +183,6 @@ sub tiehash {
     my $db = tie my %db, 'IPC::MM::BTree', mm_make_btree_table($mm);
     $self->{_shd}->{$d} = \%db;
     $self->{_db}->{$d} = $db;
-    #foreach(keys %{$self->{_shd}}) { print "=== $_\n" }
 }
 
 sub event {
@@ -236,19 +232,32 @@ sub NEXTKEY  { shift->send_query('NEXTKEY',  @_) }
 
 package bogart::mule;
 sub TIEHASH {
-    my($pkg, $lord, $name, @args) = @_;
-    $lord->TIEHASH($name);
-    bless { _name => $name, _lord => $lord }, $pkg;
+    my($pkg, $traf, $name, @args) = @_;
+    $traf->TIEHASH($name);
+    bless { _name => $name, _traf => $traf }, $pkg;
 }
 
-sub CLEAR    { $_[0]->{_lord}->CLEAR   (shift->{_name}, @_) }
-sub DELETE   { $_[0]->{_lord}->DELETE  (shift->{_name}, @_) }
-sub STORE    { $_[0]->{_lord}->STORE   (shift->{_name}, @_) }
-sub FETCH    { $_[0]->{_lord}->FETCH   (shift->{_name}, @_) }
-sub EXISTS   { $_[0]->{_lord}->EXISTS  (shift->{_name}, @_) }
-sub FIRSTKEY { $_[0]->{_lord}->FIRSTKEY(shift->{_name}, @_) }
-sub NEXTKEY  { $_[0]->{_lord}->NEXTKEY (shift->{_name}, @_) }
+sub CLEAR    { $_[0]->{_traf}->CLEAR   (shift->{_name}, @_) }
+sub DELETE   { $_[0]->{_traf}->DELETE  (shift->{_name}, @_) }
+sub STORE    { $_[0]->{_traf}->STORE   (shift->{_name}, @_) }
+sub FETCH    { $_[0]->{_traf}->FETCH   (shift->{_name}, @_) }
+sub EXISTS   { $_[0]->{_traf}->EXISTS  (shift->{_name}, @_) }
+sub FIRSTKEY { $_[0]->{_traf}->FIRSTKEY(shift->{_name}, @_) }
+sub NEXTKEY  { $_[0]->{_traf}->NEXTKEY (shift->{_name}, @_) }
 
+
+package bogart::peer;
+use base qw(bogart::mule);
+our @traf;
+sub TIEHASH {
+    push(@traf, scalar(@traf) ? $traf[0] : new bogart::trafficker);
+    shift->SUPER::TIEHASH($traf[0], @_)
+}
+
+sub DESTROY {
+    $traf[0]->done if scalar(@traf) == 1;
+    pop @traf;
+}
 
 
 
@@ -338,7 +347,7 @@ sub NEXTKEY  { $_[0]->{_lord}->NEXTKEY (shift->{_name}, @_) }
 1;
 __END__;
 
-
+# was a single hash instance version
 package bogart::dealer;
 use sharer;
 use strict;

@@ -65,6 +65,8 @@ sub deliver_callback {
     my $req_event = "$n:$p" eq $self->nodeid ? 'REQ_SELF' : 'REQ_OTHR';	
     $req_event = 'REQ_WAIT' if exists $self->{_wai}{"$n:$p"};
 
+    warn sprintf "<%s %s\n", $type, substr($m, 0, 75) if $ENV{DEBUG} > 1;
+
     switch($type) {
 	case 'REQ' { $self->fsm($req_event, "$n:$p") }
 	case 'NAK' { $self->fsm('NAK_RECV', "$n:$p") }

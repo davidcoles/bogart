@@ -1,51 +1,51 @@
 #!/usr/bin/perl
 use lib qw(.);
-use strict;
+#use strict;
 use IPC::MM qw(mm_create mm_make_btree_table);
 use File::Temp;
 use Getopt::Std;
 use bogart;
-getopts('socn:u:', \my %opts) or die;
+getopts('socpn:u:', \my %opts) or die;
 
 my $unix = defined $opts{u} ? $opts{u} : '/tmp/bogart.sock';
 my $name = defined $opts{n} ? $opts{n} : 'default';
+my $traf;
+my %hash;
 
 exit server() if $opts{s};
-exit peer() if $opts{p};
 
-tie my %h, 'bogart::hash', $name, $unix or die "tie\n";
+if($opts{p}) {
+    tie %hash, 'bogart::peer', $name or die "tie\n";
+} else {
+    tie %hash, 'bogart::hash', $unix, $name or die "tie\n";
+}
 
 if(scalar @ARGV) {
-    my $n = 1;
-    %h = map { chop; $n++ => $_ } <>;
-    exit;	
+    %hash = ();
+    while(<>) { chop; $hash{$.} = ($_) }
+} elsif($opts{o}) {
+    foreach (sort {$a<=>$b} keys %hash) { printf "%-4s: %s\n", $_, $hash{$_} }
+} else {
+    while(my($k, $v) = each %hash) { printf "%-4s: %s\n", $k, $v }
 }
 
-if($opts{o}) {
-    foreach (sort { $a <=> $b } keys %h) { printf "%-4s: %s\n", $_, $h{$_} }
-    exit;
-}
-
-while(my($k, $v) = each %h) { printf "%-4s: %s\n", $k, $v }
-
-
+untie %hash;
 
 
 ######################################################################
-our $trafficker;
 sub server {
-    my $b;
+    my $deal;
     if($opts{c}) {
-	$trafficker = new bogart::trafficker unless defined $trafficker;
-	$b = new bogart::dealer(\&bogart_mule) or die;
+	$traf = new bogart::trafficker() unless defined $traf;
+	$deal = new bogart::dealer(\&bogart_mule) or die;
     } else {
-	$b = new bogart::dealer(\&ipc_mm_btree) or die;
+	$deal = new bogart::dealer(\&ipc_mm_btree) or die;
     }
-    $b->run($unix, 0777);
+    $deal->run($unix, 0777);
     exit;
 }
 
-sub bogart_mule { my $db = tie my %db, 'bogart::mule', $trafficker, @_ }
+sub bogart_mule { my $db = tie my %db, 'bogart::mule', $traf, @_ }
 
 sub ipc_mm_btree {
     my($pkg, @args) = @_;

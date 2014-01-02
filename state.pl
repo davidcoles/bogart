@@ -44,7 +44,7 @@ sub new {
 	deliver => \&deliver_callback, confchg => \&confchg_callback });
     $self->join($group);
 
-    # seems it's possible to bind to 127.0.0.1
+    # seems it's possible to accidentally bind to 127.0.0.1 even on lan
     if($self->nodeid =~ /^16777343:/ && ! -t \*STDIN && !defined $ENV{DEBUG}) {
 	warn "16777343 - bound to localhost - set DEBUG env var to ignore\n";
 	sleep 5;
@@ -64,6 +64,8 @@ sub deliver_callback {
     
     my $req_event = "$n:$p" eq $self->nodeid ? 'REQ_SELF' : 'REQ_OTHR';	
     $req_event = 'REQ_WAIT' if exists $self->{_wai}{"$n:$p"};
+
+    warn sprintf "<%s %s\n", $type, substr($m, 0, 75) if $ENV{DEBUG} > 1;
 
     switch($type) {
 	case 'REQ' { $self->fsm($req_event, "$n:$p") }

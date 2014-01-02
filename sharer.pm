@@ -28,6 +28,7 @@ sub process_event {
 
 sub new {
     my($pkg, $group) = @_;
+    $group = $pkg unless defined $group;
     my $c_r = new IO::Handle;
     my $c_w = new IO::Handle;
     my $s_r = new IO::Handle;
@@ -71,17 +72,17 @@ sub send_query {
 }
 
 sub send_event { shift->sendpdu(@_) }
-sub send_query {
-    my($self, @args) = @_;
-    my $w = $self->_w;
-    my $r = $self->_r;
-    return unless defined $w;
-    print $w sprintf "%s\n", $self->json->encode(\@args);
-    my $a = <$r>;
-    my @a = defined $a && $a ne '' ? @{from_json($a)} : ();
-    wantarray ? @a : shift @a;
-}
-
+#sub send_query {
+#    my($self, @args) = @_;
+#    my $w = $self->_w;
+#    my $r = $self->_r;
+#    return unless defined $w;
+#    print $w sprintf "%s\n", $self->json->encode(\@args);
+#    my $a = <$r>;
+#    my @a = defined $a && $a ne '' ? @{from_json($a)} : ();
+#    wantarray ? @a : shift @a;
+#}
+sub done { close($_[0]->_w); $_[0]->{_cpg}->join }
 
 sub _w { $_[0]->{_w} }
 sub _r { $_[0]->{_r} }
